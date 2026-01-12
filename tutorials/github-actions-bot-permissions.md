@@ -135,16 +135,23 @@ sudo su - github-runner
 # Create a directory for the runner
 mkdir -p ~/actions-runner && cd ~/actions-runner
 
-# Download the latest runner package
-# Get the latest version from: https://github.com/actions/runner/releases
-curl -o actions-runner-linux-x64-2.311.0.tar.gz -L \
-  https://github.com/actions/runner/releases/download/v2.311.0/actions-runner-linux-x64-2.311.0.tar.gz
+# Get the latest runner version dynamically
+RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | grep 'tag_name' | cut -d\" -f4 | sed 's/v//')
+
+# Download the latest runner package for Linux x64
+curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L \
+  https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
+
+# Alternatively, use a specific version (check https://github.com/actions/runner/releases)
+# RUNNER_VERSION="2.311.0"
+# curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L \
+#   https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
 
 # Extract the installer
-tar xzf ./actions-runner-linux-x64-2.311.0.tar.gz
+tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
 
 # Clean up the archive
-rm actions-runner-linux-x64-2.311.0.tar.gz
+rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
 ```
 
 ### Step 4: Get Runner Registration Token (Via GitHub UI)

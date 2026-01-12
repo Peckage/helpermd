@@ -135,8 +135,11 @@ sudo su - github-runner
 # Create a directory for the runner
 mkdir -p ~/actions-runner && cd ~/actions-runner
 
-# Get the latest runner version dynamically
-RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | grep 'tag_name' | cut -d\" -f4 | sed 's/v//')
+# Get the latest runner version dynamically (if jq is available)
+RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name' | sed 's/v//')
+
+# Alternative without jq (less robust)
+# RUNNER_VERSION=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | grep 'tag_name' | cut -d\" -f4 | sed 's/v//')
 
 # Download the latest runner package for Linux x64
 curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L \
@@ -243,6 +246,32 @@ sudo chmod -R 755 /home/github-runner/actions-runner/_work
 sudo mkdir -p /opt/deploy
 sudo chown github-runner:github-runner /opt/deploy
 sudo chmod 755 /opt/deploy
+```
+
+### Step 8.5: Configure Sudo Access (Optional, for deployments)
+
+**⚠️ IMPORTANT SECURITY NOTE**: Only configure sudo if absolutely necessary for your workflows.
+
+If your workflows need to restart services or perform other privileged operations, configure sudo with minimal, specific permissions:
+
+**⚠️ Run as root:**
+
+```bash
+# Edit sudoers file safely
+sudo visudo
+
+# Add this line to allow ONLY specific commands without password:
+# github-runner ALL=(ALL) NOPASSWD: /bin/systemctl restart myapp, /bin/systemctl stop myapp, /bin/systemctl start myapp
+
+# For file copying to protected directories, consider changing directory ownership instead:
+sudo chown -R github-runner:www-data /var/www/html
+sudo chmod -R 775 /var/www/html
+```
+
+**❌ NEVER do this (security risk):**
+```bash
+# DON'T: Give unrestricted sudo access
+# github-runner ALL=(ALL) NOPASSWD: ALL
 ```
 
 ### Step 9: Configure Workflow to Use Self-Hosted Runner
@@ -622,7 +651,8 @@ jobs:
 steps:
   - name: Validate before execution
     run: |
-      if [[ ! "${{ github.event.pull_request.head.ref }}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+      # Validate branch name (allows slashes for feature/fix branches)
+      if [[ ! "${{ github.event.pull_request.head.ref }}" =~ ^[a-zA-Z0-9_/-]+$ ]]; then
         echo "Invalid branch name"
         exit 1
       fi
@@ -774,8 +804,16 @@ jobs:
           # Get current version
           CURRENT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           
-          # Calculate new version (simplified)
-          NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
+          # Calculate new version based on bump type
+          # NOTE: This is a simplified example. Use a proper semver tool like 'semver' or 'bump2version' in production
+          BUMP_TYPE="${{ steps.semver.outputs.bump }}"
+          if [ "$BUMP_TYPE" = "major" ]; then
+            NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. '{print "v" ($1+1) ".0.0"}' | sed 's/v//;s/^/v/')
+          elif [ "$BUMP_TYPE" = "minor" ]; then
+            NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. '{print "v" $1 "." ($2+1) ".0"}' | sed 's/v//;s/^/v/')
+          else
+            NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. '{print "v" $1 "." $2 "." ($3+1)}' | sed 's/v//;s/^/v/')
+          fi
           
           # Create tag
           git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
@@ -869,10 +907,14 @@ jobs:
           npm ci
           npm run build
           
-          # Deploy (commands run as github-runner user)
-          sudo systemctl stop myapp
-          sudo cp -r dist/* /var/www/html/
-          sudo systemctl start myapp
+          # Deploy files (as github-runner user)
+          cp -r dist/* /var/www/html/
+          
+          # SECURITY NOTE: If you need to restart services, configure sudoers properly:
+          # Run 'sudo visudo' and add:
+          # github-runner ALL=(ALL) NOPASSWD: /bin/systemctl restart myapp, /bin/systemctl stop myapp, /bin/systemctl start myapp
+          # This limits sudo access to only specific commands
+          sudo systemctl restart myapp
       
       - name: Update deployment status
         if: always()
@@ -1023,7 +1065,11 @@ jobs:
   on:
     pull_request_target:  # Has access to secrets but runs on base branch
   ```
-  ⚠️ **Warning**: Be very careful with `pull_request_target` - validate all inputs!
+  ⚠️ **CRITICAL SECURITY WARNING**: `pull_request_target` runs with write permissions and access to secrets, even for untrusted fork PRs. This can be exploited by attackers! Only use this trigger if you:
+  - Checkout the PR code explicitly (don't use the default checkout)
+  - Thoroughly validate and sanitize all PR inputs before using them
+  - Avoid running any untrusted code from the PR
+  - Consider using a separate workflow with minimal permissions for fork PRs
 
 ### Token expired error
 - **Cause**: PAT has expired
